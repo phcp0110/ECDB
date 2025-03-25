@@ -1,0 +1,262 @@
+---
+title: "relatorio_grupo6"
+output: html_document
+date: "2025-03-22"
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Instalar pacotes necessários (se ainda não instalaste)
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+install.packages("openxlsx")
+
+BiocManager::install("cBioPortalData")
+BiocManager::install("SummarizedExperiment")
+
+# Carregar pacotes
+library(cBioPortalData)
+library(MultiAssayExperiment)
+library(SummarizedExperiment)
+library(dplyr)
+library(openxlsx)
+library(ggplot2)
+# Download do dataset KIRC (Kidney Renal Clear Cell Carcinoma TCGA)
+kirc_pack <- cBioDataPack("kirc_tcga")
+
+# Resumo dos dados carregados
+summary(kirc_pack)
+
+# Confirmar nomes exatos dos experimentos disponíveis
+names(experiments(kirc_pack))
+
+# Carregar corretamente os dados de expressão génica (RNA-seq)
+rna_data <- assay(kirc_pack, "mrna_seq_v2_rsem")
+
+# Carregar dados clínicos
+clinical_data <- colData(kirc_pack) %>% as.data.frame()
+
+# Verificar rapidamente os dados carregados
+dim(rna_data)
+head(rna_data[, 1:5])
+
+dim(clinical_data)
+head(clinical_data)
+```
+
+## Análise inicial dos dados
+
+Nesta fase procedeu-se à exploração inicial dos dados de forma a
+perceber a dimensão dos dados correspondentes à expressão genética bem
+como dos metadados.
+
+```{r, echo=FALSE, results='markup', warning=FALSE, message=FALSE}
+# Análise da estrutura dos dados descarregados
+cat("Class of kirc_pack:", class(kirc_pack), "\n")
+cat("Class of rna_data:", class(rna_data), "\n")
+cat("Dimensions of rna_data:", paste(dim(rna_data)[1], "x", dim(rna_data)[2]), "\n")
+cat("First 5 column names of rna_data:", paste(colnames(rna_data)[1:5], collapse=", "), "\n")
+cat("First 5 row names of rna_data:", paste(rownames(rna_data)[1:5], collapse=", "), "\n")
+
+cat("\n")
+
+# Análise dos metadados a partir do experimento de expressão génica
+linhas_metadados <- SummarizedExperiment::rowData(experiments(kirc_pack)[["mrna_seq_v2_rsem"]])
+amostras_metadados <- clinical_data[clinical_data$SAMPLE_ID %in% colnames(experiments(kirc_pack)[["mrna_seq_v2_rsem"]]), ]
+
+
+#criar ficheiro xlsx para analise em python
+write.xlsx(linhas_metadados, "linhas_metadados.xlsx")
+write.xlsx(clinical_data, "amostras_metadados.xlsx")
+
+cat("Class of linhas_metadados:", class(linhas_metadados), "\n",
+    "Class of amostras_metadados:", class(amostras_metadados), "\n",
+    "Dimensions of linhas_metadados:", paste(dim(linhas_metadados), collapse=" x "), "\n",
+    "Dimensions of amostras_metadados:", paste(dim(amostras_metadados), collapse=" x "), "\n",
+    "First 5 column names of linhas_metadados:", paste(colnames(linhas_metadados)[1:5], collapse=", "), "\n",
+    "First 5 column names of amostras_metadados:", paste(colnames(amostras_metadados)[1:5], collapse=", "), "\n")
+```
+
+## 2.3 Preparação e pré-processamento dos dados
+
+Nesta etapa preparamos o dataset para ser, posteriormente, submetido a
+análise de expressão diferencial e de enriquecimento.
+
+```{r}
+# Extração da matriz de expresrnsão génica
+geneExp <- SummarizedExperiment::assay(experiments(kirc_pack)[["mrna_seq_v2_rsem"]])
+
+#transformar em dataframe
+geneExp_df <- as.data.frame(geneExp)
+
+#criar ficheiro xlsx para analise em python
+write.xlsx(geneExp_df, "gene_expression.xlsx")
+```
+
+Com o package **SummarizedExperiment** recorremos ao comando **assay()**
+para extrair a matriz de expressão do objeto `SummarizedExperiment`.
+Esta matriz contém os dados numéricos de expressão para cada gene em
+cada amostra, que são essenciais para análises subsequentes, como
+normalização, análise de expressão diferencial e análise de
+enriquecimento.
+
+# 3. Metadados
+
+## 3.1. Pré-processamento e filtragem
+
+Com o intuito de fazer uma filtragem dos metadados, uma vez que é comum
+a existência de valores omissos, procedeu-se à diminuição do número de
+colunas associadas aos metadados, eliminando-se as colunas que possuem
+mais de 10% de valores omissos.
+
+```{r, echo=TRUE}
+# Remoção de colunas com mais de 10% de valores omissos ou "not Available"
+amostras_metadados[amostras_metadados == "[Not Available]"] <- NA
+
+# Calcular a percentagem de valores ausentes por coluna
+missing_percent <- colMeans(is.na(amostras_metadados)) * 100
+
+# Manter apenas colunas com menos de 10% de valores ausentes
+amostras_metadados_limpo <- amostras_metadados[, missing_percent < 10]
+
+# Verificar o número de colunas antes e depois
+cat("Colunas antes da limpeza:", ncol(amostras_metadados), "\n")
+cat("Colunas depois da limpeza:", ncol(amostras_metadados_limpo), "\n")
+```
+
+Com esta filtragem foi possível diminuir o número de colunas, garantindo
+que os parâmetros utilizados para posterior análise abrangem a maioria
+das amostras.
+
+## 3.2. Análise Descritiva e Exploratória {.tabset}
+
+```{r}
+status_counts <- table(amostras_metadados_limpo$OS_STATUS, useNA = "ifany")
+
+# Converter para dataframe para o ggplot
+df_status <- as.data.frame(status_counts)
+colnames(df_status) <- c("Status", "Count")
+
+# Criar o gráfico de barras
+ggplot(df_status, aes(x = Status, y = Count, fill = Status)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = Count), vjust = -0.5, color = "black", size = 4) +  # Adiciona o número em cima da barra
+  theme_minimal() +
+  labs(title = "Distribuição de OS_STATUS (Vivos, Mortos)",
+       x = "Status do Paciente",
+       y = "Número de Pacientes") +
+  scale_fill_manual(values = c("blue", "red", "gray"))
+```
+
+```{r}
+laterality_counts <- table(amostras_metadados_limpo$LATERALITY, useNA = "ifany")
+
+# Converter para dataframe para o ggplot
+df_laterality <- as.data.frame(laterality_counts)
+colnames(df_laterality) <- c("Laterality", "Count")
+
+# Criar o gráfico de barras
+ggplot(df_laterality, aes(x =Laterality, y = Count, fill = Laterality)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = Count), vjust = -0.5, color = "black", size = 4) +  # Adiciona o número em cima da barra
+  theme_minimal() +
+  labs(title = "Distribuição de LATERALITY (Rim esquerdo, direito e Bilateral)",
+       x = "Lateralidade do Paciente",
+       y = "Número de Pacientes") +
+  scale_fill_manual(values = c("gray", "red", "blue"))
+
+```
+
+```{r}
+#ajustavel para se perceber melhor a distribuição normal (binwidth=5)
+ggplot(amostras_metadados_limpo, aes(x = AGE)) +
+  geom_histogram(binwidth = 1, fill = "steelblue", color = "black", alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Distribuição das Idades dos Pacientes",
+       x = "Idade",
+       y = "Frequência") +
+  theme(axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14))
+```
+
+```{r}
+#corrigir o MALE que conta como Male
+amostras_metadados_limpo$SEX <- replace(amostras_metadados_limpo$SEX, 
+                                        amostras_metadados_limpo$SEX == "MALE", 
+                                        "Male")
+
+sex_counts <- table(amostras_metadados_limpo$SEX, useNA = "ifany")
+
+# Converter para dataframe para usar no ggplot
+df_sex <- as.data.frame(sex_counts)
+colnames(df_sex) <- c("Sex", "Count")
+
+# Calcular percentagens
+df_sex$Percentage <- (df_sex$Count / sum(df_sex$Count)) * 100
+
+# Criar rótulos combinando valores absolutos e percentuais
+df_sex$Label <- paste0(df_sex$Count, " (", round(df_sex$Percentage, 1), "%)")
+
+# Criar o gráfico de barras
+ggplot(df_sex, aes(x = Sex, y = Count, fill = Sex)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = Label), vjust = -0.5, color = "black", size = 4) +  # Adiciona rótulos com números e percentagens
+  theme_minimal() +
+  labs(title = "Distribuição do Sexo dos Pacientes",
+       x = "Sexo",
+       y = "Número de Pacientes") +
+  scale_fill_brewer(palette = "Set1")
+```
+
+```{r}
+stage_counts <- table(amostras_metadados_limpo$AJCC_PATHOLOGIC_TUMOR_STAGE, useNA = "ifany")
+
+# Converter para dataframe para usar no ggplot
+df_stage <- as.data.frame(stage_counts)
+colnames(df_stage) <- c("Stage", "Count")
+
+# Calcular percentagens
+df_stage$Percentage <- (df_stage$Count / sum(df_stage$Count)) * 100
+
+# Criar rótulos combinando valores absolutos e percentagens
+df_stage$Label <- paste0(df_stage$Count, " (", round(df_stage$Percentage, 1), "%)")
+
+# Criar o gráfico de barras
+ggplot(df_stage, aes(x = Stage, y = Count, fill = Stage)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = Label), vjust = -0.5, color = "black", size = 4) +  # Adiciona rótulos com números e percentagens
+  theme_minimal() +
+  labs(title = "Distribuição dos Estágios do Cancro (AJCC)",
+       x = "Estágio do Tumor",
+       y = "Número de Pacientes") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + # Inclina os rótulos do eixo X para melhor visualização
+  scale_fill_brewer(palette = "Set3")
+```
+
+```{r}
+df_race <- as.data.frame(race_counts)
+colnames(df_race) <- c("Race", "Count")
+
+# Calcular percentagens
+df_race$Percentage <- (df_race$Count / sum(df_race$Count)) * 100
+
+# Criar rótulos combinando valores absolutos e percentuais
+df_race$Label <- paste0(df_race$Count, " (", round(df_race$Percentage, 1), "%)")
+
+# Criar o gráfico de barras
+ggplot(df_race, aes(x = Race, y = Count, fill = Race)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = Label), vjust = -0.5, color = "black", size = 4) +  # Adiciona rótulos com números e percentagens
+  theme_minimal() +
+  labs(title = "Distribuição da Raça dos Pacientes",
+       y = "Número de Pacientes") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + # Inclina os rótulos do eixo X para melhor visualização
+  scale_fill_brewer(palette = "Set2")
+```
