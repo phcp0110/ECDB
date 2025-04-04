@@ -1,0 +1,24 @@
+```{r, message=FALSE, warning=FALSE}
+# Converter para data frame para facilitar visualização
+rna_df <- as.data.frame(t(rna_data))
+
+
+
+#  Boxplot dos 20 genes mais variáveis
+gene_vars <- apply(rna_df, 2, var)
+top_genes <- names(sort(gene_vars, decreasing = TRUE))[1:20]
+ggplot(tidyr::pivot_longer(rna_df[top_genes], everything(), names_to = "Gene", values_to = "Expression"),
+       aes(x = Gene, y = Expression)) +
+  geom_boxplot(fill = "darkorange") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Boxplot dos 20 genes mais variáveis")
+
+#  Heatmap dos 20 genes mais expressos (em média)
+top_mean_genes <- names(sort(colMeans(rna_df), decreasing = TRUE))[1:20]
+heatmap_data <- t(scale(rna_df[top_mean_genes]))
+heatmap(as.matrix(heatmap_data), Rowv = NA, Colv = NA, col = heat.colors(256), 
+        scale = "none", margins = c(10, 5), main = "Heatmap dos 20 genes mais expressos")
+
+
+```
