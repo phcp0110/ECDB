@@ -1,0 +1,128 @@
+
+---
+title: "Análise Genómica Completa - TCGA KIRC"
+author: "Grupo [NOME_DO_GRUPO]"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
+```
+
+# Introdução
+
+Neste relatório é realizada uma análise completa dos dados de expressão RNA-Seq do projeto TCGA-KIRC. Utilizamos múltiplos métodos para identificar genes diferencialmente expressos e analisamos a sua relevância biológica através de enriquecimento funcional.
+
+# 1. Instalação e Carregamento de Pacotes
+
+```{r pacotes}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+BiocManager::install(c("TCGAbiolinks", "SummarizedExperiment", "DESeq2", "edgeR",
+                       "limma", "EnhancedVolcano", "pheatmap", "clusterProfiler", 
+                       "org.Hs.eg.db", "biomaRt"))
+
+library(TCGAbiolinks)
+library(SummarizedExperiment)
+library(DESeq2)
+library(edgeR)
+library(limma)
+library(ggplot2)
+library(pheatmap)
+library(EnhancedVolcano)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(biomaRt)
+```
+
+# 2. Download dos Dados RNA-Seq
+
+```{r download}
+query <- GDCquery(
+  project = "TCGA-KIRC",
+  data.category = "Transcriptome Profiling",
+  data.type = "Gene Expression Quantification",
+  workflow.type = "HTSeq - Counts"
+)
+GDCdownload(query)
+data <- GDCprepare(query)
+```
+
+# 3. DESeq2 - Expressão Diferencial
+
+```{r deseq2}
+counts <- assay(data)
+colData <- colData(data)
+dds <- DESeqDataSetFromMatrix(countData = counts, colData = colData, design = ~ vital_status)
+dds <- dds[rowSums(counts(dds)) >= 10, ]
+dds <- DESeq(dds)
+res_deseq <- results(dds)
+summary(res_deseq)
+```
+
+# 4. edgeR - Expressão Diferencial
+
+```{r edger}
+group <- factor(colData$vital_status)
+dge <- DGEList(counts = counts, group = group)
+dge <- calcNormFactors(dge)
+design <- model.matrix(~group)
+dge <- estimateDisp(dge, design)
+fit <- glmQLFit(dge, design)
+qlf <- glmQLFTest(fit)
+topTags(qlf)
+```
+
+# 5. limma-voom - Expressão Diferencial
+
+```{r limma}
+v <- voom(dge, design, plot=FALSE)
+fit2 <- lmFit(v, design)
+fit2 <- eBayes(fit2)
+topTable(fit2, coef=2)
+```
+
+# 6. Volcano Plot (DESeq2)
+
+```{r volcano}
+EnhancedVolcano(res_deseq,
+    lab = rownames(res_deseq),
+    x = 'log2FoldChange',
+    y = 'pvalue',
+    title = 'Volcano Plot - DESeq2',
+    pCutoff = 0.05,
+    FCcutoff = 1.5
+)
+```
+
+# 7. Heatmap dos Top 30 Genes (DESeq2)
+
+```{r heatmap}
+top_genes <- head(order(res_deseq$pvalue), 30)
+mat <- counts(dds, normalized=TRUE)[top_genes, ]
+mat <- log2(mat + 1)
+pheatmap(mat, show_rownames=TRUE, show_colnames=FALSE, scale="row",
+         main="Top 30 Genes Diferencialmente Expressos")
+```
+
+# 8. Enriquecimento Funcional (GO + KEGG)
+
+```{r enrich}
+# Converter IDs para entrez
+sig_genes <- rownames(res_deseq)[which(res_deseq$padj < 0.05)]
+gene_df <- bitr(sig_genes, fromType="SYMBOL", toType="ENTREZID", OrgDb=org.Hs.eg.db)
+
+# Enriquecimento GO
+ego <- enrichGO(gene = gene_df$ENTREZID, OrgDb = org.Hs.eg.db, ont = "BP",
+                pAdjustMethod = "BH", pvalueCutoff = 0.01)
+barplot(ego, showCategory=10, title="Enriquecimento GO - Biological Process")
+
+# Enriquecimento KEGG
+ekegg <- enrichKEGG(gene = gene_df$ENTREZID, organism = "hsa")
+barplot(ekegg, showCategory=10, title="Enriquecimento KEGG")
+```
+
+# Conclusão
+
+Através de múltiplas abordagens (DESeq2, edgeR, limma), identificámos genes diferencialmente expressos entre amostras de KIRC. A análise de enriquecimento revelou processos biológicos e vias celulares relevantes, permitindo uma compreensão mais profunda do papel destes genes na fisiopatologia do carcinoma renal.
